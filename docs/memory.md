@@ -10,3 +10,13 @@ Memory is the fundamental cognative process of encoding, storing and retrieving 
 2. Storing: this is bascially the pysical or vitural retention of that encoded pattern it can ranges froma millisec to a lifetime.
 
 3. Retrieval: This is the process of locating, accessing and bringing the information when needed. 
+
+###The human brain
+the human brain don't save files or information in a directory, instead meories are distrubtured arross network of billons of neurons.
+
+cerbal cortex- longterm storage
+hippocampus - encoding takes place
+
+
+
+
