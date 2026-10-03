@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Digital Hippocampus</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <div class="wordmark">Digital Hippocampus</div>
+    <div class="system-state">Observation system ready</div>
+  </header>
+  <main>
+    <section class="intro">
+      <div>
+        <p class="eyebrow">Video memory / 01</p>
+        <h1>Review what happened.</h1>
+      </div>
+      <p class="lead">Add a video to create a timestamped record of visible objects and changes. When Gemini events are enabled, the video is temporarily sent to Google's Gemini API.</p>
+    </section>
+    <section class="upload-panel" aria-label="Upload video">
+      <input id="video" type="file" accept="video/*">
+      <button id="upload">Process video</button>
+      <div class="status" id="status" aria-live="polite"></div>
+    </section>
+    <section class="ask-panel">
+      <h2>Ask the archive</h2>
+      <p>Ask for the latest object observation, for example: “Where was the chair last seen?”</p>
+      <div class="question-row">
+        <input id="question" type="text" placeholder="What was the last observation?" autocomplete="off">
+        <button id="ask">Ask</button>
+      </div>
+      <div class="answer" id="answer" aria-live="polite" hidden></div>
+    </section>
+    <section class="archive">
+      <div class="archive-heading">
+        <h2>Observation archive</h2>
+        <span id="record-count">— records</span>
+      </div>
+      <div id="memories"><p class="empty">Loading archive…</p></div>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
