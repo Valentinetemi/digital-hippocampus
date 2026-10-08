@@ -1,8 +1,11 @@
 # NVIDIA/Nebius submission plan
 
-Status: implementation plan, prepared October 8, 2026  
-Target repository: `digital-hippocampus-nvidia`  
-Target track: Personal AI  
+Status: implementation plan, prepared October 8, 2026
+
+Target repository: `digital-hippocampus-nvidia`
+
+Target track: Personal AI
+
 Supplied deadline: October 30, 2026 at 6:00 PM WAT
 
 This plan reuses the shared Digital Hippocampus live perception, persistent episode memory,

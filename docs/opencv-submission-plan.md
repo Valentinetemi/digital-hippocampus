@@ -1,8 +1,11 @@
 # OpenCV submission plan
 
-Status: implementation plan, prepared October 8, 2026  
-Target repository: `digital-hippocampus-opencv`  
-Submission targets: main competition and Agentic Vision award  
+Status: implementation plan, prepared October 8, 2026
+
+Target repository: `digital-hippocampus-opencv`
+
+Submission targets: main competition and Agentic Vision award
+
 Deferred: optional COOL integration
 
 This is a competition-specific branch plan, not a replacement for the shared Digital
