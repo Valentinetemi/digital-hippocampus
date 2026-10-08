@@ -38,6 +38,16 @@
       <button id="start-observation">Start observation</button>
       <button id="stop-observation" class="secondary" disabled>Stop</button>
       <div class="status" id="live-status" aria-live="polite">Camera is not running.</div>
+      <details class="caregiver-settings">
+        <summary>Optional caregiver preview</summary>
+        <div>
+          <label class="check-label"><input id="caregiver-enabled" type="checkbox"> Create local outbox previews after an unanswered check-in</label>
+          <label><span>Selected recipient</span><input id="caregiver-recipient" type="text" value="Caregiver demo" disabled></label>
+          <label><span>Escalation delay</span><select id="caregiver-delay" disabled><option value="30">30 seconds — demo</option><option value="120">2 minutes</option><option value="300">5 minutes</option></select></label>
+          <label><span>Notification limit</span><select id="caregiver-limit" disabled><option value="1">1 preview</option><option value="2">2 previews</option></select></label>
+        </div>
+        <p>Local preview only. External delivery is unavailable in this development build.</p>
+      </details>
     </section>
 
     <section class="live-grid">
@@ -122,6 +132,17 @@
         <span class="fact-label">Facts, not conclusions</span>
       </div>
       <div id="evidence" class="evidence"><p class="empty">No episode evidence yet.</p></div>
+    </section>
+
+    <section class="panel caregiver-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">Caregiver extension</p>
+          <h2>Local preview outbox</h2>
+        </div>
+        <span class="fact-label">Nothing is sent</span>
+      </div>
+      <div id="caregiver-outbox"><p class="empty">Caregiver preview is off. Enable it before starting observation to test escalation safely.</p></div>
     </section>
 
     <details class="archive-shell">

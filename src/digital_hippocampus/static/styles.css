@@ -190,6 +190,42 @@ button.secondary:hover:not(:disabled) { background: rgba(49, 94, 76, .09); }
   font-size: 12px;
 }
 
+.caregiver-settings {
+  grid-column: 1 / -1;
+  border-top: 1px solid #b7bbb4;
+  padding-top: 10px;
+}
+
+.caregiver-settings summary {
+  color: var(--green-dark);
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.caregiver-settings > div {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr .8fr .65fr;
+  gap: 10px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.caregiver-settings .check-label {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid #b7bbb4;
+  background: #f2f4ef;
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.caregiver-settings .check-label input { margin: 0 8px 0 0; }
+.caregiver-settings > p { margin: 9px 0 0; color: var(--muted); font-size: 10px; }
+
 .panel {
   border: 1px solid var(--line);
   background: var(--paper);
@@ -326,6 +362,15 @@ dd { margin: 5px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .evidence p { margin: 5px 0; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .evidence span { color: var(--muted); font-size: 9px; text-transform: capitalize; }
 
+.caregiver-panel { margin-bottom: 28px; padding: 20px; }
+.outbox-item { padding: 14px; border: 1px solid #c7b99f; background: #f6eddd; }
+.outbox-item + .outbox-item { margin-top: 10px; }
+.outbox-item > div { display: flex; justify-content: space-between; gap: 14px; }
+.outbox-item strong { font-size: 12px; }
+.outbox-item time { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; }
+.outbox-item p { margin: 9px 0 6px; font-size: 12px; line-height: 1.5; }
+.outbox-item small { color: #775b37; font-size: 10px; line-height: 1.45; }
+
 .empty { margin: 0; padding: 24px 0; color: var(--muted); font-size: 13px; }
 
 .archive-shell { margin-top: 30px; border-top: 1px solid #8f918b; }
@@ -378,6 +423,7 @@ input[type=file]::file-selector-button { margin-right: 14px; padding: 7px 10px; 
   .upload-panel,
   .question-row { grid-template-columns: 1fr; }
   .control-bar button { width: 100%; }
+  .caregiver-settings > div { grid-template-columns: 1fr; }
   .camera-card,
   .episode-card,
   .timeline-panel,

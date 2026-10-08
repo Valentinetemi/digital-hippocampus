@@ -18,6 +18,10 @@ const responseText = $('#response-text');
 const sendResponseButton = $('#send-response');
 const listenButton = $('#listen');
 const listeningIndicator = $('#listening-indicator');
+const caregiverEnabled = $('#caregiver-enabled');
+const caregiverRecipient = $('#caregiver-recipient');
+const caregiverDelay = $('#caregiver-delay');
+const caregiverLimit = $('#caregiver-limit');
 
 let currentSessionId = null;
 let recognition = null;
@@ -55,6 +59,10 @@ function renderLive(payload) {
   startButton.disabled = running;
   stopButton.disabled = !running;
   timer.disabled = running;
+  caregiverEnabled.disabled = running;
+  caregiverRecipient.disabled = running || !caregiverEnabled.checked;
+  caregiverDelay.disabled = running || !caregiverEnabled.checked;
+  caregiverLimit.disabled = running || !caregiverEnabled.checked;
   systemState.textContent = running ? 'Observation running' : 'Observation stopped';
   systemState.classList.toggle('active', running);
   liveStatus.textContent = payload.error
@@ -85,6 +93,7 @@ function renderLive(payload) {
   renderTimeline(payload.timeline || []);
   renderEvidence(payload.evidence || []);
   renderConversation(payload.checkin, payload.session_id);
+  renderCaregiverOutbox(payload.caregiver_preview, payload.caregiver_outbox || []);
 }
 
 function renderEpisode(episode) {
@@ -162,6 +171,24 @@ function renderConversation(checkin, sessionId) {
   if (awaiting && checkin.session_id === sessionId) speakOnce(checkin);
 }
 
+function renderCaregiverOutbox(config, items) {
+  const outbox = $('#caregiver-outbox');
+  if (!config?.enabled) {
+    outbox.innerHTML = '<p class="empty">Caregiver preview is off. Enable it before starting observation to test escalation safely.</p>';
+    return;
+  }
+  if (!items.length) {
+    outbox.innerHTML = `<p class="empty">Local preview armed for ${esc(config.recipient_label)} after ${config.escalation_delay_seconds} seconds. Nothing is sent externally.</p>`;
+    return;
+  }
+  outbox.innerHTML = items.map(item => `
+    <article class="outbox-item">
+      <div><strong>Preview for ${esc(item.recipient_label)}</strong><time>${esc(formatTime(item.created_at))}</time></div>
+      <p>${esc(item.message)}</p>
+      <small>${esc(item.uncertainty_note)}</small>
+    </article>`).join('');
+}
+
 function speakOnce(checkin) {
   const key = `digital-hippocampus-spoken-${checkin.id}`;
   if (sessionStorage.getItem(key) || !('speechSynthesis' in window)) return;
@@ -192,6 +219,10 @@ startButton.addEventListener('click', async () => {
         departure_confirm_seconds: Math.min(3, seconds),
         snooze_seconds: 60,
         cooldown_seconds: 60,
+        caregiver_preview_enabled: caregiverEnabled.checked,
+        caregiver_recipient: caregiverRecipient.value,
+        caregiver_escalation_delay_seconds: Number(caregiverDelay.value),
+        caregiver_notification_limit: Number(caregiverLimit.value),
       }),
     });
     renderLive(payload);
@@ -239,6 +270,12 @@ responseText.addEventListener('keydown', event => {
 });
 document.querySelectorAll('[data-response]').forEach(item => {
   item.addEventListener('click', () => sendResponse(item.dataset.response));
+});
+
+caregiverEnabled.addEventListener('change', () => {
+  caregiverRecipient.disabled = !caregiverEnabled.checked;
+  caregiverDelay.disabled = !caregiverEnabled.checked;
+  caregiverLimit.disabled = !caregiverEnabled.checked;
 });
 
 function configureSpeechRecognition() {

@@ -25,6 +25,7 @@ from .live_memory import (
     utc_now,
 )
 from .perception import Observation, PerceptionLayer
+from .notifications import CaregiverPolicyConfig, LocalCaregiverPreview
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,7 @@ class LiveCameraService:
         self._processed_frames = 0
         self._last_perception_ms: float | None = None
         self._last_result: dict[str, Any] | None = None
+        self._caregiver_preview = LocalCaregiverPreview(database)
 
     @property
     def running(self) -> bool:
@@ -117,12 +119,23 @@ class LiveCameraService:
         departure_confirm_seconds: float = 3.0,
         snooze_seconds: float = 60.0,
         cooldown_seconds: float = 60.0,
+        caregiver_preview_enabled: bool = False,
+        caregiver_recipient: str | None = None,
+        caregiver_escalation_delay_seconds: float = 120.0,
+        caregiver_notification_limit: int = 1,
     ) -> dict[str, Any]:
         config = EpisodePolicyConfig(
             departure_confirm_seconds=departure_confirm_seconds,
             checkin_after_seconds=checkin_after_seconds,
             snooze_seconds=snooze_seconds,
             cooldown_seconds=cooldown_seconds,
+        )
+        caregiver_config = CaregiverPolicyConfig(
+            enabled=caregiver_preview_enabled,
+            recipient_label=caregiver_recipient,
+            escalation_delay_seconds=caregiver_escalation_delay_seconds,
+            notification_limit=caregiver_notification_limit,
+            external_delivery_enabled=False,
         )
         with self._state_lock:
             if self._running:
@@ -145,6 +158,9 @@ class LiveCameraService:
                 self.database,
                 person_name=self.person_name,
                 config=config,
+            )
+            self._caregiver_preview = LocalCaregiverPreview(
+                self.database, caregiver_config
             )
             self.database.create_live_session(
                 self._session_id,
@@ -235,6 +251,23 @@ class LiveCameraService:
                 "timeline": timeline,
                 "evidence": evidence,
                 "checkin": checkin,
+                "caregiver_preview": {
+                    "enabled": self._caregiver_preview.config.enabled,
+                    "adapter": self._caregiver_preview.adapter_name,
+                    "external_delivery": False,
+                    "recipient_label": self._caregiver_preview.config.recipient_label,
+                    "escalation_delay_seconds": (
+                        self._caregiver_preview.config.escalation_delay_seconds
+                    ),
+                    "notification_limit": (
+                        self._caregiver_preview.config.notification_limit
+                    ),
+                },
+                "caregiver_outbox": (
+                    self.database.list_caregiver_previews(episode["id"])
+                    if episode is not None
+                    else []
+                ),
                 "alexa_simulation": True,
             }
         )
@@ -345,6 +378,7 @@ class LiveCameraService:
                 with self._state_lock:
                     self._camera_state = CameraState.UNAVAILABLE
                     self._last_result = coordinator.observe(session_id, evidence)
+                self._evaluate_caregiver(self._last_result, evidence)
                 continue
 
             since_last = time.monotonic() - last_processed
@@ -369,6 +403,7 @@ class LiveCameraService:
                     frame_path,
                 )
                 result = coordinator.observe(session_id, evidence)
+                self._evaluate_caregiver(result, evidence)
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 with self._state_lock:
                     self._camera_state = camera_state
@@ -418,6 +453,22 @@ class LiveCameraService:
         with self._state_lock:
             self._error = message
             self._camera_state = CameraState.UNAVAILABLE
+
+    def _evaluate_caregiver(
+        self, result: dict[str, Any] | None, evidence: FrameEvidence
+    ) -> dict[str, Any] | None:
+        if not result or result.get("episode") is None:
+            return None
+        episode = result["episode"]
+        checkin = self.database.get_latest_episode_checkin(episode["id"])
+        return self._caregiver_preview.evaluate(
+            episode=episode,
+            checkin=checkin,
+            observed_at=evidence.observed_at,
+            person_present=evidence.person_present,
+            camera_state=evidence.camera_state,
+            scene_clear=evidence.scene_clear,
+        )
 
     @staticmethod
     def classify_camera_state(frame: np.ndarray) -> tuple[CameraState, bool]:

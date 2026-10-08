@@ -220,6 +220,23 @@ CREATE TABLE IF NOT EXISTS checkins (
 
 CREATE INDEX IF NOT EXISTS checkins_episode_time
     ON checkins(episode_id, triggered_at);
+
+CREATE TABLE IF NOT EXISTS caregiver_notifications (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES activity_episodes(id) ON DELETE CASCADE,
+    checkin_id TEXT NOT NULL REFERENCES checkins(id) ON DELETE CASCADE,
+    recipient_label TEXT NOT NULL,
+    adapter TEXT NOT NULL CHECK(adapter = 'local_preview'),
+    status TEXT NOT NULL CHECK(status = 'preview'),
+    message TEXT NOT NULL,
+    uncertainty_note TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    UNIQUE(checkin_id, recipient_label)
+);
+
+CREATE INDEX IF NOT EXISTS caregiver_notifications_episode_time
+    ON caregiver_notifications(episode_id, created_at);
 """
 
 
@@ -1178,5 +1195,75 @@ class MemoryDatabase:
                 item = dict(row)
                 item["objects"] = json.loads(item.pop("objects_json"))
                 item["facts"] = json.loads(item.pop("facts_json"))
+                results.append(item)
+            return results
+
+    def create_caregiver_preview(
+        self,
+        *,
+        notification_id: str,
+        episode_id: str,
+        checkin_id: str,
+        recipient_label: str,
+        message: str,
+        uncertainty_note: str,
+        evidence: dict[str, Any],
+        created_at: str,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO caregiver_notifications (
+                    id, episode_id, checkin_id, recipient_label, adapter,
+                    status, message, uncertainty_note, evidence_json, created_at
+                ) VALUES (?, ?, ?, ?, 'local_preview', 'preview', ?, ?, ?, ?)
+                """,
+                (
+                    notification_id,
+                    episode_id,
+                    checkin_id,
+                    recipient_label,
+                    message,
+                    uncertainty_note,
+                    json.dumps(evidence),
+                    created_at,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM caregiver_notifications WHERE id = ?",
+                (notification_id,),
+            ).fetchone()
+            assert row is not None
+            result = dict(row)
+            result["evidence"] = json.loads(result.pop("evidence_json"))
+            return result
+
+    def count_caregiver_previews(self, episode_id: str) -> int:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT COUNT(*) AS count FROM caregiver_notifications
+                WHERE episode_id = ?
+                """,
+                (episode_id,),
+            ).fetchone()
+            return int(row["count"])
+
+    def list_caregiver_previews(
+        self, episode_id: str, *, limit: int = 10
+    ) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM caregiver_notifications
+                WHERE episode_id = ?
+                ORDER BY created_at DESC, rowid DESC LIMIT ?
+                """,
+                (episode_id, limit),
+            ).fetchall()
+            results: list[dict[str, Any]] = []
+            for row in rows:
+                item = dict(row)
+                item["evidence"] = json.loads(item.pop("evidence_json"))
                 results.append(item)
             return results

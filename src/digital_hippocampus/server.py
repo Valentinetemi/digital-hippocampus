@@ -176,6 +176,18 @@ class VideoRequestHandler(BaseHTTPRequestHandler):
                 ),
                 snooze_seconds=float(payload.get("snooze_seconds", 60.0)),
                 cooldown_seconds=float(payload.get("cooldown_seconds", 60.0)),
+                caregiver_preview_enabled=(
+                    payload.get("caregiver_preview_enabled", False) is True
+                ),
+                caregiver_recipient=(
+                    str(payload.get("caregiver_recipient", "")).strip() or None
+                ),
+                caregiver_escalation_delay_seconds=float(
+                    payload.get("caregiver_escalation_delay_seconds", 120.0)
+                ),
+                caregiver_notification_limit=int(
+                    payload.get("caregiver_notification_limit", 1)
+                ),
             )
             self.send_json(result, HTTPStatus.CREATED)
         except (TypeError, ValueError) as exc:
