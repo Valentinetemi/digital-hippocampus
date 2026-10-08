@@ -38,102 +38,102 @@ If the system does not know, it should be able to say:
 
 rather than confidently inventing a memory that never happened.
 
-## First working version
+## Live milestone
 
-The current pipeline is:
+The first live milestone now runs this pipeline:
 
 ```text
-uploaded video
-    -> timestamped frame samples
-    -> perception (YOLO11 Nano objects, light, focus, color, motion)
-    -> observations stored in SQLite
-    -> Gemini temporal event extraction (when configured)
-    -> validated symbolic events stored in SQLite
-    -> browser timeline
+laptop camera / configurable OpenCV source
+    -> responsive capture worker
+    -> bounded two-frame queue (stale frames are discarded)
+    -> asynchronous YOLO + visual perception worker
+    -> timestamped observed facts and evidence frames in SQLite
+    -> multi-frame tea-preparation inference
+    -> persistent episode state and check-in policy
+    -> browser speech + spoken/text responses
 ```
 
-### Run it
+The browser shows the live feed, camera health, activity confidence, episode state,
+transition timeline, evidence frames, and conversation. The voice surface is explicitly
+labelled **Alexa-style simulation**; it does not connect to an Alexa device or service.
 
-The existing virtual environment already contains OpenCV and NumPy. From the project
-root, start the upload app with:
+An episode can move through `ongoing`, `possibly_interrupted`, `awaiting_response`,
+`snoozed`, `resumed`, `completed`, and `dismissed`. Completion records whether it was
+visually inferred or user-confirmed. Camera failure and occlusion do not advance the
+absence timer. Restarting preserves episode/check-in state without announcing an old
+notification again.
+
+### Setup and run
+
+Python 3.11+ is required. Python 3.12 or 3.13 is recommended for the current ML stack;
+see the measured Python 3.14 loader issue in [the live demo notes](docs/live-demo.md).
 
 ```bash
-PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main serve
+python3 -m venv .venv
+.venv/bin/pip install -e .
+PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main \
+  --camera-source 0 \
+  --person-name Temi \
+  serve
 ```
 
-Then open <http://127.0.0.1:8000>, choose a video, and select **Upload and observe**.
-Uploaded videos, extracted frames, and the SQLite database are written under `data/`.
+Open <http://127.0.0.1:8000>, choose the explicitly labelled short demo timer, and
+select **Start observation**. On macOS, grant camera access to the terminal or host app
+running Python. The browser may separately request microphone access for speech input;
+typed and quick-button responses remain available.
 
-To enable Gemini symbolic-event extraction, set an API key before starting the app:
+The camera source may be an OpenCV device index, stream URL, or video path:
 
 ```bash
-export GEMINI_API_KEY="your-key"
-PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main serve
+PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main \
+  --camera-source rtsp://camera.local/live \
+  serve
 ```
 
-The default event model is `gemini-3.8-flash`. Override it with `GEMINI_MODEL` or
-`--gemini-model`. Without `GEMINI_API_KEY`, the existing local perception pipeline runs
-normally and event extraction is skipped.
+Live capture and the upload archive use the local `yolo11n.pt` checkpoint by default.
+`--no-yolo` is useful for basic visual/archive checks, but live tea inference cannot
+start without object facts. No API key is required for the live milestone.
 
-When Gemini extraction is enabled, the original video is temporarily uploaded to the
-Gemini Files API. The application requests structured JSON events and deletes the remote
-file after the request finishes. Locally stored video, frames, observations, and events
-remain under `data/`.
+### Environment variables
 
-You can also process a video without the browser:
+- `DIGITAL_HIPPOCAMPUS_CAMERA_SOURCE`: camera index, URL, or path; default `0`
+- `DIGITAL_HIPPOCAMPUS_PERSON_NAME`: name used in the check-in; default `Temi`
+- `DIGITAL_HIPPOCAMPUS_PERCEPTION_INTERVAL`: seconds between perception samples;
+  default `0.75`
+- `GEMINI_API_KEY`: optional; enables the older uploaded-video symbolic-event path
+- `GEMINI_MODEL`: optional uploaded-video event model override
+
+Keep secrets in the environment. `.env` is ignored, but the application does not load
+it automatically. The live path stays local; enabling Gemini temporarily uploads only
+an explicitly submitted archive video and deletes the remote file after extraction.
+
+### Caregiver preview
+
+The optional caregiver extension is disabled by default. When explicitly enabled in the
+UI it requires a selected recipient, escalation delay, and notification limit. It writes
+uncertainty-labelled messages to a local preview outbox only. This development build has
+no external delivery adapter and rejects attempts to enable one.
+
+### Uploaded-video archive
+
+The original upload pipeline remains available under the expandable archive section:
+timestamped frames, YOLO/ByteTrack entities, optional Gemini temporal events, and factual
+object search. A local video can also be processed from the command line:
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main process path/to/video.mp4
 ```
 
-The perception layer uses the Ultralytics YOLO11 Nano detection model (`yolo11n.pt`) by
-default. Ultralytics downloads the checkpoint on the first run; after that, inference is
-local and does not need an API key. You can also provide another model name or local
-checkpoint:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main \
-  --yolo-model path/to/model.pt serve
-```
-
-To run only the basic visual observations without YOLO:
-
-```bash
-PYTHONPATH=src .venv/bin/python -m digital_hippocampus.main --no-yolo serve
-```
-
-### Data model
-
-- `videos`: upload metadata and processing state
-- `frames`: sampled frame number, timestamp, and image path
-- `observations`: typed perception result attached to a frame
-- `event_extractions`: Gemini extraction status, model, schema version, and errors
-- `symbolic_events`: validated actions and changes across time
-- `event_evidence`: Gemini evidence timestamps linked to the nearest sampled frames
-
-Symbolic event types are currently limited to `picked_up`, `placed`, `moved`, `opened`,
-`closed`, `entered`, and `exited`. Every accepted event must have at least one evidence
-timestamp inside the video duration. Multiple timestamps are preferred but not required;
-the original video remains the primary temporal evidence. Event IDs are assigned by the
-application, and nearest-frame links are resolved deterministically rather than by Gemini.
-
-### Ask the archive
-
-The browser includes an **Ask the archive** field. It currently supports factual,
-object-based questions such as:
-
-- `What was the last observation?`
-- `Where was the chair last seen?`
-- `When was a person last seen?`
-
-The answer includes the source video, timestamp, YOLO class, confidence, and bounding
-box as pixel coordinates (`x`, `y`, `width`, `height`) measured from the frame's
-top-left corner. This first version uses local class matching rather than a language
-model, so it only answers from stored object detections and does not invent missing
-events.
-
-Run the automated pipeline checks with:
+### Test
 
 ```bash
 PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+node --check src/digital_hippocampus/static/app.js
 ```
+
+The current suite contains 44 tests, including every requested check-in behavior,
+bounded capture, occlusion/camera failure handling, persistence across restart, local
+caregiver preview safety, legacy perception, symbolic events, and HTTP endpoints.
+
+See [docs/live-demo.md](docs/live-demo.md) for the architecture, schema, measured
+latency, known limitations, demo script, and genuine build friction.
