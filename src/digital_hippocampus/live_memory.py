@@ -53,6 +53,8 @@ class ObjectFact:
     label: str
     confidence: float
     bbox_normalized_xywh: tuple[float, float, float, float] | None = None
+    entity_id: str | None = None
+    detector_track_id: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -67,6 +69,10 @@ class ObjectFact:
                 "width": width,
                 "height": height,
             }
+        if self.entity_id is not None:
+            result["entity_id"] = self.entity_id
+        if self.detector_track_id is not None:
+            result["detector_track_id"] = self.detector_track_id
         return result
 
 

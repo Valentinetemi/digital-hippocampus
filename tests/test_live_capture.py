@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from digital_hippocampus.database import MemoryDatabase
+from digital_hippocampus.entities import EntityResolver
 from digital_hippocampus.live_capture import (
     CapturedFrame,
     LiveCameraService,
@@ -138,6 +139,44 @@ class LiveCameraServiceTest(unittest.TestCase):
             {item.label for item in evidence.objects},
             {"person", "cup", "bottle"},
         )
+
+    def test_live_tracks_receive_persistent_entity_ids(self) -> None:
+        resolver = EntityResolver("session", min_consecutive_frames=2)
+        frame = np.zeros((100, 200, 3), dtype=np.uint8)
+        observation = Observation(
+            "object",
+            "cup",
+            0.9,
+            {
+                "track_id": 7,
+                "bbox_xywh": {"x": 10, "y": 20, "width": 30, "height": 40},
+                "bbox_normalized_xywh": {
+                    "x": 0.05,
+                    "y": 0.2,
+                    "width": 0.15,
+                    "height": 0.4,
+                },
+            },
+        )
+
+        first, _ = LiveCameraService._resolve_live_entities(
+            [observation], frame, 1, 0.0, resolver
+        )
+        second, _ = LiveCameraService._resolve_live_entities(
+            [observation], frame, 2, 0.75, resolver
+        )
+        evidence = LiveCameraService.observations_to_evidence(
+            datetime.now(timezone.utc),
+            CameraState.AVAILABLE,
+            True,
+            second,
+            Path("evidence.jpg"),
+        )
+
+        self.assertEqual(first, [])
+        self.assertEqual(second[0].details["entity_id"], "session:cup-1")
+        self.assertEqual(evidence.objects[0].entity_id, "session:cup-1")
+        self.assertEqual(evidence.objects[0].detector_track_id, 7)
 
     def test_capture_and_perception_run_on_separate_workers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

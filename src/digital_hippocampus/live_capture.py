@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from .database import MemoryDatabase
+from .entities import EntityResolver
 from .live_memory import (
     CameraState,
     EpisodeCoordinator,
@@ -359,6 +360,13 @@ class LiveCameraService:
             return
 
         last_processed = 0.0
+        processed_sequence = 0
+        entity_resolver = EntityResolver(
+            session_id,
+            min_consecutive_frames=2,
+            max_time_gap=max(2.5, self.perception_interval_seconds * 2),
+            max_missed_frames=4,
+        )
         output_dir = self.live_frame_dir / session_id
         output_dir.mkdir(parents=True, exist_ok=True)
         while not self._stop.is_set():
@@ -392,7 +400,39 @@ class LiveCameraService:
             started = time.perf_counter()
             camera_state, scene_clear = self.classify_camera_state(captured.frame)
             try:
-                observations = perception.observe(captured.frame)
+                processed_sequence += 1
+                detector = getattr(perception, "object_detector", None)
+                if detector is not None:
+                    tracked_objects = detector.observe(captured.frame)
+                    resolved_objects, visible_track_ids = self._resolve_live_entities(
+                        tracked_objects,
+                        captured.frame,
+                        processed_sequence,
+                        max(
+                            0.0,
+                            (
+                                captured.captured_at
+                                - (self._started_at or captured.captured_at)
+                            ).total_seconds(),
+                        ),
+                        entity_resolver,
+                    )
+                    entity_resolver.advance_frame(
+                        frame_number=processed_sequence,
+                        timestamp=max(
+                            0.0,
+                            (
+                                captured.captured_at
+                                - (self._started_at or captured.captured_at)
+                            ).total_seconds(),
+                        ),
+                        visible_track_ids=visible_track_ids,
+                    )
+                    observations = perception.observe(
+                        captured.frame, object_observations=resolved_objects
+                    )
+                else:
+                    observations = perception.observe(captured.frame)
                 frame_path = output_dir / f"frame_{captured.sequence:010d}.jpg"
                 cv2.imwrite(str(frame_path), captured.frame)
                 evidence = self.observations_to_evidence(
@@ -453,6 +493,65 @@ class LiveCameraService:
         with self._state_lock:
             self._error = message
             self._camera_state = CameraState.UNAVAILABLE
+
+    @staticmethod
+    def _resolve_live_entities(
+        observations: list[Observation],
+        frame: np.ndarray,
+        frame_number: int,
+        timestamp: float,
+        resolver: EntityResolver,
+    ) -> tuple[list[Observation], set[int]]:
+        """Attach existing resolver identities to live ByteTrack observations."""
+
+        resolved_observations: list[Observation] = []
+        visible_track_ids: set[int] = set()
+        for observation in observations:
+            bbox_details = observation.details.get("bbox_xywh")
+            track_id_value = observation.details.get("track_id")
+            if (
+                observation.kind != "object"
+                or observation.confidence is None
+                or not isinstance(bbox_details, dict)
+                or track_id_value is None
+            ):
+                continue
+            try:
+                track_id = int(track_id_value)
+                bbox = (
+                    float(bbox_details["x"]),
+                    float(bbox_details["y"]),
+                    float(bbox_details["width"]),
+                    float(bbox_details["height"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            visible_track_ids.add(track_id)
+            entity = resolver.resolve_track(
+                track_id=track_id,
+                label=observation.label,
+                frame_number=frame_number,
+                timestamp=timestamp,
+                bbox=bbox,
+                frame_width=int(frame.shape[1]),
+                detection_confidence=observation.confidence,
+                embedding=None,
+            )
+            if entity is None:
+                continue
+            details = dict(observation.details)
+            details["entity_id"] = entity.entity_id
+            details["identity_confidence"] = entity.identity_confidence
+            details["zone"] = resolver.entity_zones.get(entity.entity_id)
+            resolved_observations.append(
+                Observation(
+                    observation.kind,
+                    observation.label,
+                    observation.confidence,
+                    details,
+                )
+            )
+        return resolved_observations, visible_track_ids
 
     def _evaluate_caregiver(
         self, result: dict[str, Any] | None, evidence: FrameEvidence
@@ -520,6 +619,12 @@ class LiveCameraService:
                     observation.label,
                     observation.confidence,
                     normalized_bbox,
+                    str(observation.details.get("entity_id"))
+                    if observation.details.get("entity_id") is not None
+                    else None,
+                    int(observation.details["track_id"])
+                    if observation.details.get("track_id") is not None
+                    else None,
                 )
             )
 
