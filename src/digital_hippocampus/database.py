@@ -128,6 +128,98 @@ CREATE INDEX IF NOT EXISTS symbolic_events_video_time
     ON symbolic_events(video_id, start_time);
 CREATE INDEX IF NOT EXISTS event_evidence_frame
     ON event_evidence(frame_id);
+
+CREATE TABLE IF NOT EXISTS live_sessions (
+    id TEXT PRIMARY KEY,
+    camera_source TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('running', 'stopped', 'failed')),
+    started_at TEXT NOT NULL,
+    stopped_at TEXT,
+    last_frame_at TEXT,
+    dropped_frames INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS live_observations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL REFERENCES live_sessions(id) ON DELETE CASCADE,
+    observed_at TEXT NOT NULL,
+    frame_path TEXT,
+    camera_state TEXT NOT NULL CHECK(camera_state IN (
+        'available', 'occluded', 'unavailable'
+    )),
+    person_present INTEGER,
+    scene_clear INTEGER NOT NULL,
+    motion_score REAL NOT NULL DEFAULT 0,
+    objects_json TEXT NOT NULL DEFAULT '[]',
+    facts_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS live_observations_session_time
+    ON live_observations(session_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS activity_episodes (
+    id TEXT PRIMARY KEY,
+    activity_type TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    person_name TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN (
+        'ongoing', 'possibly_interrupted', 'awaiting_response',
+        'snoozed', 'resumed', 'completed', 'dismissed'
+    )),
+    confidence REAL NOT NULL CHECK(confidence >= 0 AND confidence <= 1),
+    started_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT,
+    completion_source TEXT CHECK(completion_source IN (
+        'visually_inferred', 'user_confirmed'
+    )),
+    absence_started_at TEXT,
+    next_checkin_at TEXT,
+    cooldown_until TEXT,
+    reminder_count INTEGER NOT NULL DEFAULT 0,
+    last_observation_id INTEGER REFERENCES live_observations(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS activity_episodes_state_time
+    ON activity_episodes(state, updated_at);
+
+CREATE TABLE IF NOT EXISTS episode_transitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    episode_id TEXT NOT NULL REFERENCES activity_episodes(id) ON DELETE CASCADE,
+    from_state TEXT,
+    to_state TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '{}',
+    observation_id INTEGER REFERENCES live_observations(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS episode_transitions_episode_time
+    ON episode_transitions(episode_id, created_at);
+
+CREATE TABLE IF NOT EXISTS episode_evidence (
+    episode_id TEXT NOT NULL REFERENCES activity_episodes(id) ON DELETE CASCADE,
+    observation_id INTEGER NOT NULL REFERENCES live_observations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('observed_fact', 'activity_inference', 'transition')),
+    reason TEXT NOT NULL,
+    PRIMARY KEY(episode_id, observation_id, role)
+);
+
+CREATE TABLE IF NOT EXISTS checkins (
+    id TEXT PRIMARY KEY,
+    episode_id TEXT NOT NULL REFERENCES activity_episodes(id) ON DELETE CASCADE,
+    session_id TEXT REFERENCES live_sessions(id) ON DELETE SET NULL,
+    prompt TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('awaiting_response', 'responded', 'cancelled')),
+    triggered_at TEXT NOT NULL,
+    response_text TEXT,
+    response_intent TEXT,
+    responded_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS checkins_episode_time
+    ON checkins(episode_id, triggered_at);
 """
 
 
@@ -676,3 +768,415 @@ class MemoryDatabase:
                     for item in objects
                 ],
             )
+
+    def create_live_session(
+        self,
+        session_id: str,
+        camera_source: str,
+        started_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO live_sessions (id, camera_source, status, started_at)
+                VALUES (?, ?, 'running', ?)
+                """,
+                (session_id, camera_source, started_at),
+            )
+
+    def update_live_session_frame(
+        self,
+        session_id: str,
+        observed_at: str,
+        *,
+        dropped_frames: int,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE live_sessions
+                SET last_frame_at = ?, dropped_frames = ?
+                WHERE id = ?
+                """,
+                (observed_at, dropped_frames, session_id),
+            )
+
+    def finish_live_session(
+        self,
+        session_id: str,
+        stopped_at: str,
+        *,
+        error: str | None = None,
+    ) -> None:
+        status = "failed" if error else "stopped"
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE live_sessions
+                SET status = ?, stopped_at = ?, error = ?
+                WHERE id = ?
+                """,
+                (status, stopped_at, error[:2000] if error else None, session_id),
+            )
+
+    def add_live_observation(
+        self,
+        *,
+        session_id: str,
+        observed_at: str,
+        frame_path: Path | None,
+        camera_state: str,
+        person_present: bool | None,
+        scene_clear: bool,
+        motion_score: float,
+        objects: Iterable[dict[str, Any]],
+        facts: dict[str, Any],
+    ) -> int:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO live_observations (
+                    session_id, observed_at, frame_path, camera_state,
+                    person_present, scene_clear, motion_score,
+                    objects_json, facts_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    observed_at,
+                    str(frame_path) if frame_path else None,
+                    camera_state,
+                    None if person_present is None else int(person_present),
+                    int(scene_clear),
+                    motion_score,
+                    json.dumps(list(objects)),
+                    json.dumps(facts),
+                ),
+            )
+            assert cursor.lastrowid is not None
+            return int(cursor.lastrowid)
+
+    def create_activity_episode(
+        self,
+        *,
+        episode_id: str,
+        activity_type: str,
+        display_name: str,
+        person_name: str,
+        confidence: float,
+        started_at: str,
+        observation_id: int,
+        reason: str,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO activity_episodes (
+                    id, activity_type, display_name, person_name, state,
+                    confidence, started_at, updated_at, last_observation_id
+                ) VALUES (?, ?, ?, ?, 'ongoing', ?, ?, ?, ?)
+                """,
+                (
+                    episode_id,
+                    activity_type,
+                    display_name,
+                    person_name,
+                    confidence,
+                    started_at,
+                    started_at,
+                    observation_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO episode_transitions (
+                    episode_id, from_state, to_state, reason,
+                    evidence_json, observation_id, created_at
+                ) VALUES (?, NULL, 'ongoing', ?, ?, ?, ?)
+                """,
+                (episode_id, reason, json.dumps(evidence), observation_id, started_at),
+            )
+            connection.execute(
+                """
+                INSERT INTO episode_evidence (
+                    episode_id, observation_id, role, reason
+                ) VALUES (?, ?, 'activity_inference', ?)
+                """,
+                (episode_id, observation_id, reason),
+            )
+        episode = self.get_activity_episode(episode_id)
+        assert episode is not None
+        return episode
+
+    def get_activity_episode(self, episode_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM activity_episodes WHERE id = ?", (episode_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_active_activity_episode(
+        self, activity_type: str | None = None
+    ) -> dict[str, Any] | None:
+        parameters: tuple[Any, ...] = ()
+        activity_filter = ""
+        if activity_type is not None:
+            activity_filter = "AND activity_type = ?"
+            parameters = (activity_type,)
+        with self.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM activity_episodes
+                WHERE state NOT IN ('completed', 'dismissed') {activity_filter}
+                ORDER BY rowid DESC LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_activity_episodes(self, limit: int = 20) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM activity_episodes
+                ORDER BY updated_at DESC, rowid DESC LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def attach_episode_evidence(
+        self,
+        episode_id: str,
+        observation_id: int,
+        *,
+        role: str,
+        reason: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO episode_evidence (
+                    episode_id, observation_id, role, reason
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (episode_id, observation_id, role, reason),
+            )
+            connection.execute(
+                """
+                UPDATE activity_episodes
+                SET last_observation_id = ?
+                WHERE id = ?
+                """,
+                (observation_id, episode_id),
+            )
+
+    def transition_activity_episode(
+        self,
+        episode_id: str,
+        *,
+        to_state: str,
+        reason: str,
+        created_at: str,
+        evidence: dict[str, Any],
+        observation_id: int | None = None,
+        completion_source: str | None = None,
+        absence_started_at: str | None = None,
+        next_checkin_at: str | None = None,
+        cooldown_until: str | None = None,
+        increment_reminder: bool = False,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            current = connection.execute(
+                "SELECT state FROM activity_episodes WHERE id = ?", (episode_id,)
+            ).fetchone()
+            if current is None:
+                raise KeyError(f"Unknown episode: {episode_id}")
+            from_state = str(current["state"])
+            terminal = to_state in {"completed", "dismissed"}
+            connection.execute(
+                """
+                UPDATE activity_episodes
+                SET state = ?, updated_at = ?,
+                    completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
+                    completion_source = COALESCE(?, completion_source),
+                    absence_started_at = ?, next_checkin_at = ?,
+                    cooldown_until = ?,
+                    reminder_count = reminder_count + ?,
+                    last_observation_id = COALESCE(?, last_observation_id)
+                WHERE id = ?
+                """,
+                (
+                    to_state,
+                    created_at,
+                    int(terminal),
+                    created_at,
+                    completion_source,
+                    absence_started_at,
+                    next_checkin_at,
+                    cooldown_until,
+                    int(increment_reminder),
+                    observation_id,
+                    episode_id,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO episode_transitions (
+                    episode_id, from_state, to_state, reason,
+                    evidence_json, observation_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    episode_id,
+                    from_state,
+                    to_state,
+                    reason,
+                    json.dumps(evidence),
+                    observation_id,
+                    created_at,
+                ),
+            )
+            if observation_id is not None:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO episode_evidence (
+                        episode_id, observation_id, role, reason
+                    ) VALUES (?, ?, 'transition', ?)
+                    """,
+                    (episode_id, observation_id, reason),
+                )
+        episode = self.get_activity_episode(episode_id)
+        assert episode is not None
+        return episode
+
+    def update_episode_absence(
+        self,
+        episode_id: str,
+        *,
+        updated_at: str,
+        absence_started_at: str | None,
+        observation_id: int | None = None,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE activity_episodes
+                SET updated_at = ?, absence_started_at = ?,
+                    last_observation_id = COALESCE(?, last_observation_id)
+                WHERE id = ?
+                """,
+                (updated_at, absence_started_at, observation_id, episode_id),
+            )
+        episode = self.get_activity_episode(episode_id)
+        if episode is None:
+            raise KeyError(f"Unknown episode: {episode_id}")
+        return episode
+
+    def create_checkin(
+        self,
+        *,
+        checkin_id: str,
+        episode_id: str,
+        session_id: str | None,
+        prompt: str,
+        triggered_at: str,
+    ) -> dict[str, Any]:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO checkins (
+                    id, episode_id, session_id, prompt, status, triggered_at
+                ) VALUES (?, ?, ?, ?, 'awaiting_response', ?)
+                """,
+                (checkin_id, episode_id, session_id, prompt, triggered_at),
+            )
+        result = self.get_checkin(checkin_id)
+        assert result is not None
+        return result
+
+    def get_checkin(self, checkin_id: str) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM checkins WHERE id = ?", (checkin_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_latest_episode_checkin(
+        self, episode_id: str
+    ) -> dict[str, Any] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM checkins WHERE episode_id = ?
+                ORDER BY triggered_at DESC, rowid DESC LIMIT 1
+                """,
+                (episode_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def resolve_checkin(
+        self,
+        checkin_id: str,
+        *,
+        status: str,
+        response_text: str | None,
+        response_intent: str | None,
+        responded_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE checkins
+                SET status = ?, response_text = ?, response_intent = ?,
+                    responded_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    response_text,
+                    response_intent,
+                    responded_at,
+                    checkin_id,
+                ),
+            )
+
+    def get_episode_timeline(self, episode_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            transitions = connection.execute(
+                """
+                SELECT id, from_state, to_state, reason, evidence_json,
+                       observation_id, created_at
+                FROM episode_transitions
+                WHERE episode_id = ? ORDER BY created_at, id
+                """,
+                (episode_id,),
+            ).fetchall()
+            return [
+                {
+                    **dict(row),
+                    "evidence": json.loads(row["evidence_json"]),
+                }
+                for row in transitions
+            ]
+
+    def get_episode_evidence(self, episode_id: str) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT eo.role, eo.reason, lo.*
+                FROM episode_evidence eo
+                JOIN live_observations lo ON lo.id = eo.observation_id
+                WHERE eo.episode_id = ?
+                ORDER BY lo.observed_at, lo.id
+                """,
+                (episode_id,),
+            ).fetchall()
+            results: list[dict[str, Any]] = []
+            for row in rows:
+                item = dict(row)
+                item["objects"] = json.loads(item.pop("objects_json"))
+                item["facts"] = json.loads(item.pop("facts_json"))
+                results.append(item)
+            return results
