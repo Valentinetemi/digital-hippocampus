@@ -7,14 +7,16 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 
 from .database import MemoryDatabase
 from .entities import EntityResolver
 from .perception import Observation, PerceptionLayer
-from .symbolic_events import GeminiSymbolicEventExtractor
+
+if TYPE_CHECKING:
+    from .symbolic_events import GeminiSymbolicEventExtractor
 
 
 SUPPORTED_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}

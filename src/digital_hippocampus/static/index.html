@@ -3,43 +3,151 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Digital Hippocampus</title>
+  <title>Digital Hippocampus — Live Memory</title>
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header>
     <div class="wordmark">Digital Hippocampus</div>
-    <div class="system-state">Observation system ready</div>
+    <div class="system-state" id="system-state">Observation stopped</div>
   </header>
   <main>
     <section class="intro">
       <div>
-        <p class="eyebrow">Video memory / 01</p>
-        <h1>Review what happened.</h1>
+        <p class="eyebrow">Live episodic memory / milestone 01</p>
+        <h1>Remember what was in progress.</h1>
       </div>
-      <p class="lead">Add a video to create a timestamped record of visible objects and changes. When Gemini events are enabled, the video is temporarily sent to Google's Gemini API.</p>
+      <p class="lead">The camera records visible facts over time, infers an activity only after repeated evidence, and checks in when a supported episode may have been interrupted.</p>
     </section>
-    <section class="upload-panel" aria-label="Upload video">
-      <input id="video" type="file" accept="video/*">
-      <button id="upload">Process video</button>
-      <div class="status" id="status" aria-live="polite"></div>
+
+    <aside class="simulation-banner" aria-label="Alexa simulation notice">
+      <span>Alexa-style simulation</span>
+      Browser speech and speech recognition simulate the voice interaction. This is not connected to an Amazon Alexa device or service.
+    </aside>
+
+    <section class="control-bar" aria-label="Live observation controls">
+      <label>
+        <span>Check-in timer</span>
+        <select id="timer">
+          <option value="10">10 seconds — short demo timer</option>
+          <option value="30">30 seconds — demo</option>
+          <option value="60">1 minute</option>
+          <option value="300">5 minutes</option>
+        </select>
+      </label>
+      <button id="start-observation">Start observation</button>
+      <button id="stop-observation" class="secondary" disabled>Stop</button>
+      <div class="status" id="live-status" aria-live="polite">Camera is not running.</div>
     </section>
-    <section class="ask-panel">
-      <h2>Ask the archive</h2>
-      <p>Ask for the latest object observation, for example: “Where was the chair last seen?”</p>
-      <div class="question-row">
-        <input id="question" type="text" placeholder="What was the last observation?" autocomplete="off">
-        <button id="ask">Ask</button>
+
+    <section class="live-grid">
+      <article class="camera-card panel">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">Live camera</p>
+            <h2>Current view</h2>
+          </div>
+          <span class="health-pill" id="camera-health">Unavailable</span>
+        </div>
+        <div class="camera-frame" id="camera-frame">
+          <img id="live-feed" alt="Live camera feed" hidden>
+          <p id="camera-placeholder">Start observation to open the configured camera.</p>
+        </div>
+        <dl class="metrics">
+          <div><dt>Processed</dt><dd id="processed-count">0</dd></div>
+          <div><dt>Dropped stale</dt><dd id="dropped-count">0</dd></div>
+          <div><dt>Last inference</dt><dd id="latency">—</dd></div>
+        </dl>
+      </article>
+
+      <article class="episode-card panel">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">Persistent episode</p>
+            <h2 id="activity-name">Waiting for activity</h2>
+          </div>
+          <span class="episode-state" id="episode-state">No episode</span>
+        </div>
+        <p class="episode-copy" id="episode-copy">Tea preparation requires repeated observations of a person, cup, preparation object, and motion. A single detection will not create an episode.</p>
+        <dl class="episode-details">
+          <div><dt>Started</dt><dd id="episode-started">—</dd></div>
+          <div><dt>Confidence</dt><dd id="episode-confidence">—</dd></div>
+          <div><dt>Completion</dt><dd id="completion-source">—</dd></div>
+          <div><dt>Reminders</dt><dd id="reminder-count">0</dd></div>
+        </dl>
+      </article>
+    </section>
+
+    <section class="memory-grid">
+      <article class="panel timeline-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">Timestamped events</p>
+            <h2>Episode timeline</h2>
+          </div>
+        </div>
+        <ol id="timeline" class="timeline"><li class="empty">No episode transitions yet.</li></ol>
+      </article>
+
+      <article class="panel conversation-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="section-label">Voice check-in</p>
+            <h2>Conversation</h2>
+          </div>
+          <span class="listening" id="listening-indicator">Not listening</span>
+        </div>
+        <div id="conversation" class="conversation" aria-live="polite">
+          <p class="empty">The simulated assistant will speak here when a check-in is due.</p>
+        </div>
+        <div class="quick-responses" aria-label="Quick responses">
+          <button data-response="Give me another minute" class="secondary">Another minute</button>
+          <button data-response="I'm done" class="secondary">I’m done</button>
+          <button data-response="Cancel" class="secondary">Cancel</button>
+        </div>
+        <div class="response-row">
+          <input id="response-text" type="text" placeholder="Type a response" autocomplete="off">
+          <button id="listen" class="icon-button" title="Speak a response" aria-label="Speak a response">Mic</button>
+          <button id="send-response">Send</button>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel evidence-panel">
+      <div class="panel-heading">
+        <div>
+          <p class="section-label">Observed support</p>
+          <h2>Evidence frames</h2>
+        </div>
+        <span class="fact-label">Facts, not conclusions</span>
       </div>
-      <div class="answer" id="answer" aria-live="polite" hidden></div>
+      <div id="evidence" class="evidence"><p class="empty">No episode evidence yet.</p></div>
     </section>
-    <section class="archive">
-      <div class="archive-heading">
-        <h2>Observation archive</h2>
-        <span id="record-count">— records</span>
-      </div>
-      <div id="memories"><p class="empty">Loading archive…</p></div>
-    </section>
+
+    <details class="archive-shell">
+      <summary>Uploaded-video archive and factual search</summary>
+      <section class="upload-panel" aria-label="Upload video">
+        <input id="video" type="file" accept="video/*">
+        <button id="upload">Process video</button>
+        <div class="status" id="status" aria-live="polite"></div>
+      </section>
+      <section class="ask-panel">
+        <h2>Ask the archive</h2>
+        <p>Ask for the latest object observation, for example: “Where was the chair last seen?”</p>
+        <div class="question-row">
+          <input id="question" type="text" placeholder="What was the last observation?" autocomplete="off">
+          <button id="ask">Ask</button>
+        </div>
+        <div class="answer" id="answer" aria-live="polite" hidden></div>
+      </section>
+      <section class="archive">
+        <div class="archive-heading">
+          <h2>Observation archive</h2>
+          <span id="record-count">— records</span>
+        </div>
+        <div id="memories"><p class="empty">Loading archive…</p></div>
+      </section>
+    </details>
   </main>
   <script src="/app.js" defer></script>
 </body>

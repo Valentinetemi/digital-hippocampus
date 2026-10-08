@@ -52,6 +52,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip Gemini event extraction even when GEMINI_API_KEY is set.",
     )
+    parser.add_argument(
+        "--camera-source",
+        default=os.environ.get("DIGITAL_HIPPOCAMPUS_CAMERA_SOURCE", "0"),
+        help=(
+            "OpenCV camera index, stream URL, or video path for live observation "
+            "(default: 0)."
+        ),
+    )
+    parser.add_argument(
+        "--person-name",
+        default=os.environ.get("DIGITAL_HIPPOCAMPUS_PERSON_NAME", "Temi"),
+        help="Name used in the grounded check-in prompt (default: Temi).",
+    )
+    parser.add_argument(
+        "--perception-interval",
+        type=float,
+        default=float(
+            os.environ.get("DIGITAL_HIPPOCAMPUS_PERCEPTION_INTERVAL", "0.75")
+        ),
+        help="Seconds between live temporal-perception samples (default: 0.75).",
+    )
 
     commands = parser.add_subparsers(dest="command", required=True)
     serve = commands.add_parser("serve", help="Start the video upload web app.")
@@ -67,6 +88,8 @@ def main() -> None:
     args = build_parser().parse_args()
     if args.sample_interval <= 0:
         raise SystemExit("--sample-interval must be greater than zero")
+    if args.perception_interval <= 0:
+        raise SystemExit("--perception-interval must be greater than zero")
 
     event_extractor = None
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -84,6 +107,9 @@ def main() -> None:
             sample_interval=args.sample_interval,
             yolo_model=args.yolo_model,
             event_extractor=event_extractor,
+            camera_source=args.camera_source,
+            person_name=args.person_name,
+            perception_interval_seconds=args.perception_interval,
         )
         return
 

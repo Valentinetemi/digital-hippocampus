@@ -4,18 +4,24 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import time
 import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote, urlparse
 
+from .live_capture import LiveCameraService
 from .pipeline import VideoPipeline
-from .symbolic_events import GeminiSymbolicEventExtractor
+
+if TYPE_CHECKING:
+    from .symbolic_events import GeminiSymbolicEventExtractor
 
 
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 MAX_QUESTION_BYTES = 16 * 1024
+MAX_CONTROL_BYTES = 16 * 1024
 STATIC_DIR = Path(__file__).with_name("static")
 STATIC_ROUTES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -26,6 +32,7 @@ STATIC_ROUTES = {
 
 class VideoRequestHandler(BaseHTTPRequestHandler):
     pipeline: VideoPipeline
+    live_service: LiveCameraService
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
@@ -48,6 +55,12 @@ class VideoRequestHandler(BaseHTTPRequestHandler):
         if path == "/api/videos":
             self.send_json(self.pipeline.database.list_videos())
             return
+        if path == "/api/live/status":
+            self.send_json(self.live_service.status())
+            return
+        if path == "/api/live/feed":
+            self.serve_live_feed()
+            return
         if path.startswith("/api/videos/"):
             video_id = path.removeprefix("/api/videos/")
             video = self.pipeline.database.get_video(video_id)
@@ -59,10 +72,22 @@ class VideoRequestHandler(BaseHTTPRequestHandler):
         if path.startswith("/frames/"):
             self.serve_frame(path)
             return
+        if path.startswith("/live-frames/"):
+            self.serve_live_frame(path)
+            return
         self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
 
     def do_POST(self) -> None:
         request_path = urlparse(self.path).path
+        if request_path == "/api/live/start":
+            self.start_live_observation()
+            return
+        if request_path == "/api/live/stop":
+            self.send_json(self.live_service.stop())
+            return
+        if request_path == "/api/live/respond":
+            self.respond_to_checkin()
+            return
         if request_path == "/api/questions":
             self.answer_question()
             return
@@ -118,6 +143,61 @@ class VideoRequestHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json(
                 {"error": f"Processing failed: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+    def read_json_body(self, *, maximum_bytes: int) -> dict[str, object]:
+        raw_length = self.headers.get("Content-Length")
+        try:
+            content_length = int(raw_length or "0")
+        except ValueError as exc:
+            raise ValueError("Invalid Content-Length") from exc
+        if content_length < 0 or content_length > maximum_bytes:
+            raise ValueError("Request body is too large")
+        if content_length == 0:
+            return {}
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError("Request body must be valid JSON") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Request body must be a JSON object")
+        return payload
+
+    def start_live_observation(self) -> None:
+        try:
+            payload = self.read_json_body(maximum_bytes=MAX_CONTROL_BYTES)
+            result = self.live_service.start(
+                checkin_after_seconds=float(
+                    payload.get("checkin_after_seconds", 15.0)
+                ),
+                departure_confirm_seconds=float(
+                    payload.get("departure_confirm_seconds", 3.0)
+                ),
+                snooze_seconds=float(payload.get("snooze_seconds", 60.0)),
+                cooldown_seconds=float(payload.get("cooldown_seconds", 60.0)),
+            )
+            self.send_json(result, HTTPStatus.CREATED)
+        except (TypeError, ValueError) as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self.send_json(
+                {"error": f"Could not start live observation: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+
+    def respond_to_checkin(self) -> None:
+        try:
+            payload = self.read_json_body(maximum_bytes=MAX_CONTROL_BYTES)
+            text = str(payload.get("text", "")).strip()
+            if not text:
+                raise ValueError("Enter or speak a response")
+            self.send_json(self.live_service.respond(text))
+        except ValueError as exc:
+            self.send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self.send_json(
+                {"error": f"Could not handle the response: {exc}"},
                 HTTPStatus.INTERNAL_SERVER_ERROR,
             )
 
@@ -183,6 +263,56 @@ class VideoRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def serve_live_feed(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header(
+            "Content-Type", "multipart/x-mixed-replace; boundary=frame"
+        )
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.end_headers()
+        version = -1
+        try:
+            while True:
+                version, jpeg = self.live_service.wait_for_jpeg(
+                    version, timeout=1.0
+                )
+                if jpeg is None:
+                    if not self.live_service.running:
+                        return
+                    continue
+                self.wfile.write(b"--frame\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(jpeg)}\r\n\r\n".encode())
+                self.wfile.write(jpeg)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+                if not self.live_service.running:
+                    return
+                time.sleep(0.01)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+
+    def serve_live_frame(self, request_path: str) -> None:
+        parts = request_path.strip("/").split("/")
+        if len(parts) != 3:
+            self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        _, session_id, filename = parts
+        if not session_id.isalnum() or Path(filename).name != filename:
+            self.send_json({"error": "Not found"}, HTTPStatus.NOT_FOUND)
+            return
+        path = self.live_service.live_frame_dir / session_id / filename
+        if not path.is_file():
+            self.send_json({"error": "Evidence frame not found"}, HTTPStatus.NOT_FOUND)
+            return
+        body = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Cache-Control", "private, max-age=3600")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
 
 def run_server(
     *,
@@ -192,6 +322,9 @@ def run_server(
     sample_interval: float,
     yolo_model: Path | str | None,
     event_extractor: GeminiSymbolicEventExtractor | None,
+    camera_source: str | int = 0,
+    person_name: str = "Temi",
+    perception_interval_seconds: float = 0.75,
 ) -> None:
     pipeline = VideoPipeline(
         data_dir,
@@ -199,8 +332,18 @@ def run_server(
         yolo_model,
         event_extractor,
     )
+    live_service = LiveCameraService(
+        pipeline.database,
+        data_dir,
+        camera_source=camera_source,
+        yolo_model=yolo_model,
+        person_name=person_name,
+        perception_interval_seconds=perception_interval_seconds,
+    )
     handler = type(
-        "ConfiguredVideoHandler", (VideoRequestHandler,), {"pipeline": pipeline}
+        "ConfiguredVideoHandler",
+        (VideoRequestHandler,),
+        {"pipeline": pipeline, "live_service": live_service},
     )
     server = ThreadingHTTPServer((host, port), handler)
     print(f"Digital Hippocampus is running at http://{host}:{port}")
@@ -214,4 +357,5 @@ def run_server(
     except KeyboardInterrupt:
         print("\nStopping server.")
     finally:
+        live_service.stop()
         server.server_close()
