@@ -62,6 +62,9 @@ class EntityResolverTest(unittest.TestCase):
         self.assertIsNotNone(third)
         self.assertEqual(len(resolver.entities), 1)
         self.assertEqual(resolver.state_events[0].event_type, "APPEARED")
+        self.assertEqual(resolver.state_events[0].timestamp, 0.0)
+        self.assertEqual(resolver.state_events[0].evidence_frame_number, 2)
+        self.assertEqual(resolver.state_events[0].evidence_timestamp, 0.2)
 
     def test_track_id_break_reuses_entity_with_similar_embedding(self) -> None:
         resolver = EntityResolver(
@@ -154,6 +157,8 @@ class EntityResolverTest(unittest.TestCase):
         )
         self.assertEqual(moved.source_zone, "left")
         self.assertEqual(moved.destination_zone, "center")
+        self.assertEqual(moved.evidence_frame_number, 2)
+        self.assertEqual(moved.evidence_timestamp, 0.2)
 
     def test_two_detections_in_one_frame_cannot_use_the_same_entity(self) -> None:
         resolver = EntityResolver("video-1", min_iou=0.3)

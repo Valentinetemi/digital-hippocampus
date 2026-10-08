@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS entity_state_events (
 CREATE INDEX IF NOT EXISTS entity_state_events_video_time
     ON entity_state_events(video_id, timestamp_seconds);
 
+CREATE TABLE IF NOT EXISTS entity_event_evidence (
+    event_id TEXT PRIMARY KEY
+        REFERENCES entity_state_events(event_id) ON DELETE CASCADE,
+    frame_number INTEGER NOT NULL CHECK(frame_number >= 0),
+    timestamp_seconds REAL NOT NULL CHECK(timestamp_seconds >= 0),
+    sampled_frame_id INTEGER REFERENCES frames(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS entity_event_evidence_frame
+    ON entity_event_evidence(sampled_frame_id);
+
 CREATE TABLE IF NOT EXISTS event_extractions (
     id TEXT PRIMARY KEY,
     video_id TEXT NOT NULL REFERENCES videos(id) ON DELETE CASCADE,
@@ -370,6 +381,29 @@ class MemoryDatabase:
                     for event in event_list
                 ],
             )
+            sampled_frames = {
+                int(row["frame_number"]): int(row["id"])
+                for row in connection.execute(
+                    "SELECT id, frame_number FROM frames WHERE video_id = ?",
+                    (video_id,),
+                ).fetchall()
+            }
+            connection.executemany(
+                """
+                INSERT INTO entity_event_evidence (
+                    event_id, frame_number, timestamp_seconds, sampled_frame_id
+                ) VALUES (?, ?, ?, ?)
+                """,
+                [
+                    (
+                        event.event_id,
+                        event.evidence_frame_number,
+                        event.evidence_timestamp,
+                        sampled_frames.get(event.evidence_frame_number),
+                    )
+                    for event in event_list
+                ],
+            )
 
     def get_entity_state_events(self, video_id: str) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -521,15 +555,35 @@ class MemoryDatabase:
     ) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
-            SELECT event_id, video_id, entity_id, event_type,
-                   timestamp_seconds, confidence, source_zone, destination_zone
-            FROM entity_state_events
-            WHERE video_id = ?
-            ORDER BY timestamp_seconds, event_id
+            SELECT ese.event_id, ese.video_id, ese.entity_id, ese.event_type,
+                   ese.timestamp_seconds, ese.confidence,
+                   ese.source_zone, ese.destination_zone,
+                   eee.frame_number AS evidence_frame_number,
+                   eee.timestamp_seconds AS evidence_timestamp_seconds,
+                   f.id AS evidence_frame_id,
+                   f.image_path AS evidence_image_path
+            FROM entity_state_events ese
+            LEFT JOIN entity_event_evidence eee ON eee.event_id = ese.event_id
+            LEFT JOIN frames f ON f.id = eee.sampled_frame_id
+            WHERE ese.video_id = ?
+            ORDER BY ese.timestamp_seconds, ese.event_id
             """,
             (video_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            event = dict(row)
+            evidence = {
+                "frame_id": event.pop("evidence_frame_id"),
+                "frame_number": event.pop("evidence_frame_number"),
+                "timestamp_seconds": event.pop("evidence_timestamp_seconds"),
+                "image_path": event.pop("evidence_image_path"),
+            }
+            event["evidence"] = (
+                [evidence] if evidence["frame_number"] is not None else []
+            )
+            results.append(event)
+        return results
 
     def create_event_extraction(
         self,

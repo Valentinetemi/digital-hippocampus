@@ -216,8 +216,90 @@ class VideoPipelineTest(unittest.TestCase):
                 [event["event_type"] for event in result["entity_events"]],
                 ["APPEARED", "DISAPPEARED"],
             )
+            appeared_evidence = result["entity_events"][0]["evidence"][0]
+            self.assertEqual(appeared_evidence["frame_number"], 2)
+            self.assertEqual(appeared_evidence["timestamp_seconds"], 0.4)
+            self.assertIsNone(appeared_evidence["frame_id"])
+            self.assertIsNone(appeared_evidence["image_path"])
             self.assertEqual(result["tracking_summary"]["entity_count"], 1)
             self.assertEqual(result["tracking_summary"]["event_count"], 2)
+
+    def test_tracked_movement_keeps_exact_frame_and_timestamp_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            video_path = root / "sample.avi"
+            self.make_video(video_path)
+            pipeline = VideoPipeline(
+                root / "data",
+                sample_interval=0.2,
+                yolo_model=None,
+            )
+
+            class FakeMovingDetector:
+                class_names = ["chair"]
+
+                def __init__(self) -> None:
+                    self.frame_number = 0
+
+                def reset(self) -> None:
+                    self.frame_number = 0
+
+                def observe(self, _frame: np.ndarray) -> list[Observation]:
+                    x = 5.0 if self.frame_number < 3 else 35.0
+                    self.frame_number += 1
+                    return [
+                        Observation(
+                            "object",
+                            "chair",
+                            0.9,
+                            details={
+                                "track_id": 7,
+                                "bbox_xywh": {
+                                    "x": x,
+                                    "y": 10.0,
+                                    "width": 10.0,
+                                    "height": 10.0,
+                                },
+                            },
+                        )
+                    ]
+
+                def embed_detection(
+                    self, _frame: np.ndarray, _bbox: tuple[float, ...]
+                ) -> tuple[float, ...]:
+                    return (1.0, 0.0)
+
+            pipeline.perception.object_detector = FakeMovingDetector()
+
+            result = pipeline.process(video_path)
+
+            moved_events = [
+                event
+                for event in result["entity_events"]
+                if event["event_type"] == "MOVED"
+            ]
+            self.assertEqual(len(moved_events), 1)
+            moved = moved_events[0]
+            self.assertEqual(moved["source_zone"], "left")
+            self.assertEqual(moved["destination_zone"], "center")
+            self.assertEqual(moved["timestamp_seconds"], 0.6)
+            self.assertEqual(
+                moved["evidence"],
+                [
+                    {
+                        "frame_id": result["frames"][3]["id"],
+                        "frame_number": 3,
+                        "timestamp_seconds": 0.6,
+                        "image_path": result["frames"][3]["image_path"],
+                    }
+                ],
+            )
+
+            reopened_database = MemoryDatabase(root / "data" / "memory.db")
+            self.assertEqual(
+                reopened_database.get_entity_state_events(result["id"]),
+                result["entity_events"],
+            )
 
     def test_symbolic_events_are_persisted_after_perception(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

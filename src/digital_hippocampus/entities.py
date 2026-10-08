@@ -66,6 +66,8 @@ class EntityStateEvent:
     event_type: EntityEventType
     timestamp: float
     confidence: float
+    evidence_frame_number: int
+    evidence_timestamp: float
     source_zone: str | None = None
     destination_zone: str | None = None
 
@@ -206,6 +208,8 @@ class EntityResolver:
                 "APPEARED",
                 pending.first_timestamp,
                 pending.confidence,
+                evidence_frame_number=frame_number,
+                evidence_timestamp=timestamp,
                 destination_zone=zone,
             )
         else:
@@ -217,6 +221,8 @@ class EntityResolver:
                     "APPEARED",
                     pending.first_timestamp,
                     similarity,
+                    evidence_frame_number=frame_number,
+                    evidence_timestamp=timestamp,
                     destination_zone=zone,
                 )
 
@@ -267,6 +273,8 @@ class EntityResolver:
                 "DISAPPEARED",
                 timestamp,
                 entity.identity_confidence,
+                evidence_frame_number=frame_number,
+                evidence_timestamp=timestamp,
                 source_zone=self.entity_zones.get(entity_id),
             )
 
@@ -282,6 +290,8 @@ class EntityResolver:
                 "DISAPPEARED",
                 timestamp,
                 entity.identity_confidence,
+                evidence_frame_number=self.entity_last_frame[entity_id],
+                evidence_timestamp=entity.last_seen,
                 source_zone=self.entity_zones.get(entity_id),
             )
 
@@ -304,6 +314,8 @@ class EntityResolver:
                     "entity_id": event.entity_id,
                     "timestamp": event.timestamp,
                     "confidence": event.confidence,
+                    "evidence_frame_number": event.evidence_frame_number,
+                    "evidence_timestamp": event.evidence_timestamp,
                     "source_zone": event.source_zone,
                     "destination_zone": event.destination_zone,
                 }
@@ -354,6 +366,8 @@ class EntityResolver:
                 "MOVED",
                 timestamp,
                 min(confidence, entity.identity_confidence),
+                evidence_frame_number=frame_number,
+                evidence_timestamp=timestamp,
                 source_zone=previous_zone,
                 destination_zone=zone,
             )
@@ -379,6 +393,8 @@ class EntityResolver:
         timestamp: float,
         confidence: float,
         *,
+        evidence_frame_number: int,
+        evidence_timestamp: float,
         source_zone: str | None = None,
         destination_zone: str | None = None,
     ) -> None:
@@ -390,6 +406,8 @@ class EntityResolver:
                 event_type=event_type,
                 timestamp=timestamp,
                 confidence=max(0.0, min(1.0, confidence)),
+                evidence_frame_number=evidence_frame_number,
+                evidence_timestamp=evidence_timestamp,
                 source_zone=source_zone,
                 destination_zone=destination_zone,
             )
