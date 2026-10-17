@@ -135,5 +135,3 @@ The current suite contains 44 tests, including every requested check-in behavior
 bounded capture, occlusion/camera failure handling, persistence across restart, local
 caregiver preview safety, legacy perception, symbolic events, and HTTP endpoints.
 
-See [docs/live-demo.md](docs/live-demo.md) for the architecture, schema, measured
-latency, known limitations, demo script, and genuine build friction.
